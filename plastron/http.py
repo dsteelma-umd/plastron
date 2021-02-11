@@ -137,6 +137,17 @@ class Repository:
         self.ua_string = ua_string
         self.delegated_user = on_behalf_of
 
+        self.forwarded_host = config.get('FORWARDED_HOST')
+        if self.forwarded_host is not None:
+            self.session.headers.update(
+                {'X-Forwarded-Host': self.forwarded_host}
+            )
+        self.forwarded_proto = config.get('FORWARDED_PROTO')
+        if self.forwarded_proto is not None:
+            self.session.headers.update(
+                {'X-Forwarded-Proto': self.forwarded_proto}
+            )
+
         structure_type = config.get('STRUCTURE', 'flat').lower()
         if structure_type == 'hierarchical':
             self.creator = HierarchicalCreator(self)

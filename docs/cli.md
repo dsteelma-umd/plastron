@@ -377,6 +377,8 @@ Only **one** of these should be used. `AUTH_TOKEN` takes precedence over
 | Option      | Description |
 | ----------- | ----------- |
 |`SERVER_CERT`|Path to a PEM-encoded copy of the server's SSL certificate; only needed for servers using self-signed certs|
+|`FORWARDED_HOST`|The hostname to use in generating resource URIs, in preference to `REST_ENDPOINT`. Typically used with Kubernetes.|
+|`FORWARDED_PROTO`|The protocol (`http` or `https`) to use in generating resource URIs. Typically used with Kubernetes.|
 
 ### Batch Configuration
 
