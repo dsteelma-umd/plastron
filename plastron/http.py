@@ -10,6 +10,7 @@ from jwcrypto.jwt import JWT
 from plastron.exceptions import ConfigError, FailureException, RESTAPIException
 from rdflib import Graph, URIRef
 from requests.exceptions import ConnectionError
+from urllib.parse import urlsplit
 
 
 OMIT_SERVER_MANAGED_TRIPLES = 'return=representation; omit="http://fedora.info/definitions/v4/repository#ServerManaged"'
@@ -120,6 +121,13 @@ class Repository:
     def __init__(self, config, ua_string=None, on_behalf_of=None):
         # repo root
         self.endpoint = config['REST_ENDPOINT'].rstrip('/')
+
+        # Extract endpoint URL components for managing forward host
+        parsed_endpoint_url = urlsplit(self.endpoint)
+        self.fcrepo_proto = parsed_endpoint_url.scheme
+        self.fcrepo_host = parsed_endpoint_url.hostname
+        self.fcrepo_base_path = parsed_endpoint_url.path
+
         # default container path
         self.relpath = config['RELPATH']
         if not self.relpath.startswith('/'):
@@ -147,6 +155,8 @@ class Repository:
             self.session.headers.update(
                 {'X-Forwarded-Proto': self.forwarded_proto}
             )
+
+        self.forwarded_endpoint = f"{self.forwarded_proto}://{self.forwarded_host}{self.fcrepo_base_path}"
 
         structure_type = config.get('STRUCTURE', 'flat').lower()
         if structure_type == 'hierarchical':
@@ -187,6 +197,9 @@ class Repository:
     def __exit__(self, type, value, traceback):
         self.relpath = self._path_stack.pop()
 
+    def is_forwarded(self):
+        return (self.forwarded_host is not None) or (self.forwarded_proto is not None)
+
     def is_reachable(self):
         try:
             response = self.head(self.fullpath)
@@ -209,6 +222,11 @@ class Repository:
         if headers is None:
             headers = {}
         target_uri = self._insert_transaction_uri(url)
+
+        if self.is_forwarded():
+            # Reverse forward
+            url = self.undo_forward(url)
+
         self.logger.debug("%s %s", method, target_uri)
         if self.ua_string is not None:
             headers['User-Agent'] = self.ua_string
@@ -256,10 +274,9 @@ class Repository:
             created_uri = self._remove_transaction_uri(
                 response.headers['Location'] if 'Location' in response.headers else url
             )
-            if 'describedby' in response.links:
-                description_uri = response.links['describedby']['url']
-            else:
-                description_uri = created_uri
+            created_uri = self.handle_forwards(created_uri)
+            description_uri = self.process_description_uri(created_uri, response)
+
             return ResourceURI(created_uri, description_uri)
         else:
             raise RESTAPIException(response)
@@ -310,10 +327,38 @@ class Repository:
         response = self.head(uri, **kwargs)
         if response.status_code != 200:
             raise RESTAPIException(response)
+        return self.process_description_uri(uri, response)
+
+    def process_description_uri(self, uri, response):
+        result = None
+
         if 'describedby' in response.links:
-            return response.links['describedby']['url']
+            result = response.links['describedby']['url']
         else:
-            return uri
+            result = uri
+
+        result = self.handle_forwards(result)
+        return result
+
+    def handle_forwards(self, url):
+        # Replace fcrepo URL with forwarded host URL
+        parsed_url = urlsplit(url)
+        if self.forwarded_proto:
+            parsed_url = parsed_url._replace(scheme=self.forwarded_proto)
+        if self.forwarded_host:
+            parsed_url = parsed_url._replace(netloc=self.forwarded_host)
+
+        return parsed_url.geturl()
+
+    def undo_forward(self, url):
+        # Replace fowarded host URL with fcrepo URL (if needed)
+        result = url
+        if url.startswith(self.forwarded_endpoint):
+            parsed_url = urlsplit(url)
+            full_path = parsed_url.path
+            subpath = full_path[len(self.fcrepo_base_path):]
+            result = self.endpoint + subpath
+        return result
 
     def get_graph(self, url, include_server_managed=True):
         description_uri = self.get_description_uri(url)
@@ -372,7 +417,11 @@ class Repository:
     def _insert_transaction_uri(self, uri):
         if not self.in_transaction() or uri.startswith(self.transaction.uri):
             return uri
-        elif uri.startswith(self.endpoint):
+
+        if self.is_forwarded():
+            uri = self.undo_forward(uri)
+
+        if uri.startswith(self.endpoint):
             relpath = uri[len(self.endpoint):]
             return '/'.join([p.strip('/') for p in (self.transaction.uri, relpath)])
         else:
