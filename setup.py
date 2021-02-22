@@ -8,8 +8,7 @@ https://github.com/pypa/sampleproject
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
 from os import path
-
-import plastron
+from src import plastron
 
 here = path.abspath(path.dirname(__file__))
 
@@ -62,7 +61,8 @@ setup(
     #
     #   py_modules=["my_module"],
     #
-    packages=find_packages(exclude=['contrib', 'docs', 'tests']),
+    packages=find_packages('src'),
+    package_dir={'': 'src'},
 
     # This field lists other packages that your project depends on to run.
     # Any package you put here will be installed by pip when your project is
